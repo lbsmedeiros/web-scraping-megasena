@@ -137,16 +137,6 @@ class LoteriasCaixa:
             ac.send_keys(Keys.ENTER).perform()
             self.esperar_loading(driver=driver)
 
-    def verificar_mega_virada(self, driver):
-        """
-        Verifica se o sorteio atual é da "Mega da Virada".
-
-        :param driver: Instância do driver do Selenium.
-        :return: True se for da "Mega da Virada", False caso contrário.
-        """
-        texto = self.find_element(driver, self.locators["tipo_de_sorteio"]).text.strip()
-        return texto == "Mega da Virada"
-
     def coletar_data_sorteio(self, driver):
         """
         Coleta a data do sorteio atual.
@@ -217,8 +207,8 @@ class LoteriasCaixa:
 
     def coletar_valores(self, driver):
         nr_sorteio_atual = self.coletar_nr_sorteio(driver=driver)
-        virada = self.verificar_mega_virada(driver=driver)
         data_sorteio = self.coletar_data_sorteio(driver=driver)
+        virada = True if int(data_sorteio[-4:]) >= 2008 and data_sorteio.startswith("31/12") else False
         dezenas = self.coletar_dezenas(driver=driver)
         local_do_sorteio = self.coletar_local(driver=driver)
         qtd_6, premio_6 = self.coletar_ganhadores_premio(
