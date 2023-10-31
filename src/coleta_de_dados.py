@@ -1,4 +1,3 @@
-from pathlib import Path
 from time import sleep
 
 from selenium.common.exceptions import (
@@ -12,6 +11,7 @@ from selenium.webdriver import Chrome
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 from sqlalchemy import create_engine
@@ -30,9 +30,13 @@ class LoteriasCaixa:
     url = config.url
 
     options = Options()
-    options.add_argument("--log-level=3")
+
+    service = Service(executable_path=ChromeDriverManager().install())
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
 
     locators = {
+        "loading": (By.XPATH, '//*[@id="loading"]/div'),
         "tipo_de_sorteio": (By.XPATH, '//*[@id="wp_resultados"]/div[2]/div/div/h3[2]'),
         "numero_do_sorteio": (By.XPATH, '//*[@id="wp_resultados"]/div[1]/div/h2/span'),
         "dezenas": (By.XPATH, '//*[@id="ulDezenas"]//li'),
@@ -84,7 +88,7 @@ class LoteriasCaixa:
 
         :return: Instância do driver do Selenium.
         """
-        driver = Chrome(ChromeDriverManager().install(), options=self.options)
+        driver = Chrome(service=self.service, options=self.options)
         driver.maximize_window()
         return driver
 
@@ -111,35 +115,27 @@ class LoteriasCaixa:
         )
         return valor
 
-    def coletar_ultimo_sorteio_db(self):
+    def esperar_loading(self, driver):
+        sleep(0.5)
+        self.find_element(driver, self.locators["loading"], timer=60, condition=EC.invisibility_of_element)
+
+    def navegar_para_primeiro_sorteio(self, driver):
         """
-        Define qual é o último sorteio contido no database
-
-        :return: Número do sorteio mais recente no database ou zero.
-        """
-        if not Path(config.caminho_db).exists():
-            return 0
-
-        engine = create_engine(f"sqlite:///{config.caminho_db}", future=True)
-        repository = DbSorteios(engine)
-        res = repository.coletar_todos_sorteios()
-        resp = [i for i in res]
-
-        if resp:
-            return resp[-1][0]
-        else:
-            return 0
-
-    def navegar_para_sorteio(self, driver, sorteio):
-        """
-        Navega para a página onde será começará a coletar dados.
+        Navega para a página do sorteio de número 1.
 
         :param driver: Instância do driver do Selenium.
-        :param sorteio: Valor que será imputado.
         """
         ac = AC(driver)
-        self.find_element(driver, self.locators["imput_nr_sorteio"]).send_keys(sorteio)
-        ac.send_keys(Keys.ENTER).perform()
+        while self.coletar_nr_sorteio(driver=driver) != 1:
+            campo = self.find_element(driver, self.locators["imput_nr_sorteio"])
+            campo.click()
+            sleep(0.5)
+            ac.key_down(Keys.CONTROL).send_keys("A").key_up(Keys.CONTROL).perform()
+            sleep(0.5)
+            campo.send_keys("1")
+            sleep(0.5)
+            ac.send_keys(Keys.ENTER).perform()
+            self.esperar_loading(driver=driver)
 
     def verificar_mega_virada(self, driver):
         """
@@ -258,22 +254,25 @@ class LoteriasCaixa:
         repository = DbSorteios(engine)
         repository.create(dicionario)
 
-    def clicar_no_proximo(self, driver):
+    def navegar_para_o_proximo(self, driver, anterior):
         """
         Clica no botão "Próximo" para acessar o próximo sorteio.
 
         :param driver: Instância do driver do Selenium.
+        :anterior: Último número de sorteio que foi coletado
         """
-        for i in range (10):
-            try:
-                self.find_element(driver, self.locators["btn_proximo"]).click()
-                break
-            except ElementClickInterceptedException:
-                if i == 9:
-                    raise
-                sleep(0.5)
+        while self.coletar_nr_sorteio(driver=driver) == anterior:
+            for i in range (10):
+                try:
+                    self.find_element(driver, self.locators["btn_proximo"]).click()
+                    break
+                except ElementClickInterceptedException:
+                    if i == 9:
+                        raise
+                    sleep(0.5)
+            self.esperar_loading(driver=driver)
 
-    def scrapping(self, driver, sorteio_mais_recente, nr_sorteio_atual):
+    def scrapping(self, driver, limite):
         """
         Coleta dados dos sorteios e insere no banco de dados.
 
@@ -281,11 +280,11 @@ class LoteriasCaixa:
         :param sorteio_mais_recente: O número do sorteio mais recente.
         :param sorteio_inicial: O número do sorteio inicial a ser coletado.
         """
-        while nr_sorteio_atual <= sorteio_mais_recente:
+        while True:
             for i in range(10):  # tenta 10x caso encontre algum erro
                 try:
                     (
-                        nr_sorteio_atual,
+                        nr_sorteio,
                         virada,
                         data_sorteio,
                         dezenas,
@@ -307,29 +306,26 @@ class LoteriasCaixa:
                         raise
                     continue
 
-            try:
-                self.inserir_no_db(
-                    {
-                        "nr_sorteio": nr_sorteio_atual,
-                        "mega_da_virada": virada,
-                        "data_sorteio": data_sorteio,
-                        "dezenas": dezenas,
-                        "local_do_sorteio": local_do_sorteio,
-                        "ganhadores_seis_dezenas": qtd_6,
-                        "premio_seis_dezenas": premio_6,
-                        "ganhadores_cinco_dezenas": qtd_5,
-                        "premio_cinco_dezenas": premio_5,
-                        "ganhadores_quatro_dezenas": qtd_4,
-                        "premio_quatro_dezenas": premio_4,
-                    }
-                )
-            except IntegrityError:
-                pass
+            self.inserir_no_db(
+                {
+                    "nr_sorteio": nr_sorteio,
+                    "mega_da_virada": virada,
+                    "data_sorteio": data_sorteio,
+                    "dezenas": dezenas,
+                    "local_do_sorteio": local_do_sorteio,
+                    "ganhadores_seis_dezenas": qtd_6,
+                    "premio_seis_dezenas": premio_6,
+                    "ganhadores_cinco_dezenas": qtd_5,
+                    "premio_cinco_dezenas": premio_5,
+                    "ganhadores_quatro_dezenas": qtd_4,
+                    "premio_quatro_dezenas": premio_4,
+                }
+            )
 
-            if nr_sorteio_atual == sorteio_mais_recente:
+            if nr_sorteio == limite:
                 break
 
-            self.clicar_no_proximo(driver)
+            self.navegar_para_o_proximo(driver, nr_sorteio)
 
     def fechar_navegador(self, driver):
         """
@@ -345,10 +341,7 @@ class LoteriasCaixa:
         """
         driver = self.abrir_navegador()
         self.acessar_site_loterias_caixa(driver)
-        mais_recente = self.coletar_nr_sorteio(driver)
-        ultimo_sorteio_db = self.coletar_ultimo_sorteio_db()
-        sorteio_a_coletar = ultimo_sorteio_db + 1
-        if sorteio_a_coletar != mais_recente:
-            self.navegar_para_sorteio(driver, sorteio_a_coletar)
-        self.scrapping(driver, mais_recente, sorteio_a_coletar)
+        mais_recente = self.coletar_nr_sorteio(driver=driver)
+        self.navegar_para_primeiro_sorteio(driver)
+        self.scrapping(driver, mais_recente)
         self.fechar_navegador(driver)
