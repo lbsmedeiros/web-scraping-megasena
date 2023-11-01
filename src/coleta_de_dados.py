@@ -208,7 +208,7 @@ class LoteriasCaixa:
     def coletar_valores(self, driver):
         nr_sorteio_atual = self.coletar_nr_sorteio(driver=driver)
         data_sorteio = self.coletar_data_sorteio(driver=driver)
-        virada = True if int(data_sorteio[-4:]) >= 2008 and data_sorteio.startswith("31/12") else False
+        virada = True if data_sorteio.startswith("31/12") and int(data_sorteio[-4:]) >= 2008 else False
         dezenas = self.coletar_dezenas(driver=driver)
         local_do_sorteio = self.coletar_local(driver=driver)
         qtd_6, premio_6 = self.coletar_ganhadores_premio(
